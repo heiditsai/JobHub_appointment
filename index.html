@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI 小助手</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Design tokens 複製自 apollo-enterprise-portal-shell（MAYO UI 3.0 APOLLO Foundations），勿手改 -->
+    <script src="/tailwind-theme.js"></script>
+    <link rel="stylesheet" href="/theme-vars.css">
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;600;700&display=swap">
+    <style>
+        body { font-family: 'Noto Sans TC', sans-serif; overflow: hidden; }
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: var(--color-dark-200); border-radius: 10px; }
+        ::-webkit-scrollbar-thumb:hover { background: var(--color-dark-400); }
+    </style>
+</head>
+<body class="bg-bg-card text-text-main">
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+</body>
+</html>
