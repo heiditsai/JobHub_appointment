@@ -1,17 +1,14 @@
 /**
- * JobHub 任用決策空間 — 型別、人員、標示與示例紀錄（林小姐、張先生）
- * 陳先生的可推進情境在 chenScenario.ts；流程規則（Agent 回合、核准、情境建議）在 caseFlow.ts。
- * 不打真 API；所有資料皆為示意。
+ * JobHub 任用工作空間 — 型別、人員、標示與示例紀錄（林小姐、張先生）
+ * 陳先生的可推進情境在 chenScenario.ts；任務推進規則在 caseFlow.ts。
+ * 不打真 API；所有資料（含制度條文與資料份數）皆為示例值，不代表特定公司的真實規定。
  *
- * 標示語意（共識、方案、意向、紀錄用；不可混用）：
+ * 共識標示（方案、意向、紀錄用）：
  * - agent      Agent 建議：Agent 提出、尚未經人確認
  * - pending    待決：需討論或補資料
  * - candidate  候選人已表達：候選人自己說的，不代表企業同意
  * - recorded   有紀錄：有資料來源的事實，不代表企業同意
  * - approved   已核准：只有企業授權者正式核准的條件才用
- *
- * 任務狀態（本案任務用；與上面的標示分開）：
- * 待補充／等待前置／待決策／尚未啟動／已完成
  */
 
 export type RoleKey = 'hr' | 'interviewer' | 'manager' | 'decider' | 'agent';
@@ -27,7 +24,7 @@ export interface Participant {
 
 export const PARTICIPANTS: Participant[] = [
   { id: 'agent', name: 'Agent', role: '企業顧問', roleKey: 'agent', initial: 'A' },
-  { id: 'wang', name: '王小姐', role: 'HR', roleKey: 'hr', initial: '王' },
+  { id: 'yun', name: '小芸', role: 'HR', roleKey: 'hr', initial: '芸' },
   { id: 'lee', name: '李工程師', role: '面試官', roleKey: 'interviewer', initial: '李' },
   { id: 'zhe', name: '阿哲', role: '用人主管', roleKey: 'manager', initial: '哲' },
   { id: 'lin', name: '林主管', role: '決策者', roleKey: 'decider', initial: '林' },
@@ -36,12 +33,12 @@ export const PARTICIPANTS: Participant[] = [
   { id: 'huang', name: '黃經理', role: '用人主管', roleKey: 'manager', initial: '黃' },
 ];
 
-/** 預設檢視身分：HR 王小姐（可在側欄切換，原型示意） */
-export const DEFAULT_USER_ID = 'wang';
+/** 預設檢視身分：HR 小芸（可在側欄切換，原型示意） */
+export const DEFAULT_USER_ID = 'yun';
 
 export const personOf = (id: string) => PARTICIPANTS.find(p => p.id === id)!;
 
-// ── 標示 ─────────────────────────────────────────────────────
+// ── 共識標示 ─────────────────────────────────────────────────
 
 export type Marker = 'agent' | 'pending' | 'candidate' | 'recorded' | 'approved';
 
@@ -53,53 +50,121 @@ export const MARKER_LABEL: Record<Marker, string> = {
   approved: '已核准',
 };
 
-// ── 本案任務 ─────────────────────────────────────────────────
+// ── 任務 ─────────────────────────────────────────────────────
 
-/** 三個業務領域在同一對話中交織，不是必須依序完成的分頁 */
+/** 三個業務領域只作小標籤／篩選，不是必須依序完成的關卡 */
 export type TaskDomain = '任用決策' | '任用要求與履行' | '聘用共識';
 export const TASK_DOMAINS: TaskDomain[] = ['任用決策', '任用要求與履行', '聘用共識'];
 
-export type TaskStatus = '待補充' | '等待前置' | '待決策' | '尚未啟動' | '已完成';
+export type TaskStatus = '可處理' | '進行中' | '待補充' | '等待前置' | '尚未啟動' | '已完成';
 
 /**
- * 任務來源：
- * - 制度要求：公司任用制度規定必須完成（附條文出處）
- * - 本案補充：這次討論中為了做決定而提出，不是制度規定
+ * - 制度任務：依公司管理辦法及本案適用條件產生
+ * - 本案任務：討論中新增、已採納的補充工作
  */
-export type TaskOrigin = '制度要求' | '本案補充';
-export const TASK_ORIGINS: TaskOrigin[] = ['本案補充', '制度要求'];
+export type TaskKind = '制度任務' | '本案任務';
+export const TASK_KINDS: TaskKind[] = ['制度任務', '本案任務'];
+
+export type TaskIcon = 'compass' | 'scale' | 'stamp' | 'folder' | 'signature' | 'message' | 'clipboard' | 'users' | 'laptop' | 'calendar' | 'mail';
+
+/** 完成條件項目：仍待補充 → 已收到（有人提供）→ 已符合（分析後符合條件） */
+export type CriterionState = '仍待補充' | '已收到' | '已符合';
+
+export interface Criterion {
+  id: string;
+  label: string;
+  /** 這一項要回答什麼 */
+  hint: string;
+  state: CriterionState;
+  /** 原型用：自由輸入的訊息中出現這些詞，視為提供了這一項 */
+  keywords: string[];
+  /** 草稿範例（可帶入，不是問卷） */
+  sample?: string;
+}
+
+/**
+ * 制度任務的資料清單（查看缺項）
+ * 提交後只到「待檢核」，由檢核者判定是否符合，不會直接標示符合或完成任務
+ */
+export interface DocItem {
+  name: string;
+  provider: string;
+  status: '符合' | '待修正' | '未收到' | '待檢核';
+  /** 缺漏或待補正原因 */
+  reason?: string;
+  /** 制度來源與版本（示例） */
+  policy: string;
+  policyVersion: string;
+}
+
+export interface TaskCompletion {
+  time: string;
+  byId: string;
+  /** 完成時適用的共識（方案）版本；方案變更影響條件時，保留此紀錄並標示需重新確認 */
+  planVersion: string;
+  summary: string;
+}
 
 export interface CaseTask {
   id: string;
-  origin: TaskOrigin;
-  /** 業務領域只作小標籤，不再用來分組 */
+  kind: TaskKind;
   domain: TaskDomain;
+  icon: TaskIcon;
   title: string;
-  detail: string;
+  /** 為什麼需要處理 */
+  purpose: string;
   ownerId: string;
   status: TaskStatus;
-  /** 等待前置時：在等什麼 */
-  waitingFor?: string;
-  /** 完成條件 */
-  criteria: string;
-  /** 制度要求的條文出處 */
-  policyRef?: string;
-  /** 依據的資料來源（可開原始紀錄） */
-  sourceIds?: string[];
-  /** 目前已提供的證據 */
-  evidence?: string;
-  /** 前置依賴的任務 id */
+  /** 完成後可推進的任務 */
+  unlocks?: string[];
   dependsOn?: string[];
-  /** 這項任務會影響什麼（本案補充用來說明為什麼要做） */
-  impact?: string;
-  /** 具體履行進度，例如「已收到 15／20 份」 */
-  progress?: { done: number; total: number; unit: string; label: string };
-  /** 「查看討論」時，在對話中找最近一則包含此關鍵字的訊息 */
+  /** 尚未啟動時的啟動條件 */
+  startCondition?: string;
+  criteria?: Criterion[];
+  /** 完成條件的來源：制度依據，或本案條件說明 */
+  conditionSource: string;
+  /** 指定確認角色 */
+  confirmerId?: string;
+  /** decision：透過「確認任用方案」正式核准 */
+  confirmVia?: 'task' | 'decision';
+  docs?: DocItem[];
+  evidence?: string[];
+  /** 證據對應的訊息，可回查 */
+  evidenceMsgIds?: string[];
+  completion?: TaskCompletion;
+  /** 開始處理時，Agent 的整理 */
+  kickoff?: string;
+  /** 處理中可帶入輸入框的範例（不是問卷，使用者可自由回答） */
+  templates?: { label: string; text: string }[];
+  /** 主要動作的具體動詞，例如「查看缺項」「補充工作範圍」 */
+  actionLabel?: string;
+  /** 查看討論時，在對話中找最近一則包含此詞的訊息 */
   discussKeyword?: string;
+  /** 本案進展用的精簡名稱，例如「架構責任」「任用資料」 */
+  progressName?: string;
+  /** 完成時的說法，例如「面試結果已整理」 */
+  doneLabel?: string;
+  /** 被其他任務等待時的說法，例如「工作範圍」 */
+  waitName?: string;
+}
+
+/** Agent 建議新增、尚未採納的任務 */
+export interface SuggestedTask {
+  id: string;
+  kind: TaskKind;
+  domain: TaskDomain;
+  icon: TaskIcon;
+  title: string;
+  purpose: string;
+  reason: string;
+  ownerId: string;
+  actionLabel: string;
 }
 
 export const openTaskCount = (tasks: CaseTask[]) => tasks.filter(t => t.status !== '已完成').length;
-export const isActionable = (t: CaseTask) => t.status === '待補充' || t.status === '待決策';
+export const isWorkable = (t: CaseTask) => t.status === '可處理' || t.status === '進行中' || t.status === '待補充';
+export const isReadyToConfirm = (t: CaseTask) =>
+  t.status === '進行中' && !!t.criteria?.length && t.criteria.every(c => c.state === '已符合');
 
 // ── 型別 ─────────────────────────────────────────────────────
 
@@ -111,11 +176,11 @@ export interface SummaryItem {
   marker: Marker;
   /** 下一步負責人 */
   ownerId?: string;
-  /** 下一步對應的工作清單任務（工作清單最上方的焦點） */
+  /** 下一步對應的任務（任務日誌的目前焦點） */
   taskId?: string;
 }
 
-/** 任用方案：除了職位、薪酬、責任，也呈現企業視角（解決什麼、需要什麼配套、還留下什麼問題） */
+/** 任用方案：職位、薪酬、責任＋企業視角（能解決、需要配套、仍待解決） */
 export interface PlanOption {
   id: string;
   title: string;
@@ -125,7 +190,6 @@ export interface PlanOption {
   solves: string;
   support: string;
   openIssues: string;
-  /** agent = Agent 建議／未核准；approved = 授權者已核准 */
   marker: 'agent' | 'approved';
   /** 內容已具體、可送交授權者核准 */
   confirmable?: boolean;
@@ -140,11 +204,9 @@ export interface IntentItem {
 export interface SourceDoc {
   id: string;
   title: string;
-  /** 紀錄類型：職缺／面試紀錄／溝通紀錄… */
   kind: string;
   meta: string;
   excerpt: string;
-  /** 原始紀錄欄位（唯讀） */
   fields: [string, string][];
 }
 
@@ -156,10 +218,9 @@ export interface ChangeLog {
   marker: Marker;
 }
 
-export interface TaskChange {
-  title: string;
-  from: TaskStatus;
-  to: TaskStatus;
+export interface ChecklistSnapshot {
+  taskId: string;
+  items: { label: string; state: CriterionState }[];
 }
 
 export interface ChatMessage {
@@ -167,19 +228,35 @@ export interface ChatMessage {
   authorId: string;
   time: string;
   text: string;
-  /** Agent 訊息附「查看依據」（source id） */
+  /** 對話事件（開始處理、完成、接棒、採納建議、核准），以簡短列呈現 */
+  event?: {
+    tone: 'start' | 'complete' | 'adopt' | 'approve' | 'submit';
+    title: string;
+    detail?: string;
+    next?: string;
+    /** 可回查的依據訊息 */
+    evidenceMsgIds?: string[];
+  };
+  /** 這則訊息是在處理哪個任務時送出的 */
+  taskRef?: { id: string; title: string };
+  /** Agent 訊息內的具體動作按鈕（與右側進展、自然語言操作指向同一筆任務） */
+  actions?: MessageAction[];
+  /** Agent 對完成條件的整理（當下快照） */
+  checklist?: ChecklistSnapshot;
   sources?: string[];
-  /** Agent 訊息內嵌方案卡（當下快照，之後方案更新不會回頭改舊訊息） */
+  /** 方案卡（當下快照） */
   plans?: PlanOption[];
-  /** 卡片後接續的提問 */
   followUp?: { text: string; mentionId: string };
-  /** 回覆的方案（id 與當時標題） */
   replyToPlan?: { id: string; label: string };
-  /** Agent 這次更新了共識與任務 */
-  updates?: { version: string; tasks: TaskChange[] };
 }
 
-/** 正式核准紀錄 */
+export type MessageActionKind = 'docs' | 'provide' | 'ask' | 'draft' | 'confirm' | 'approve' | 'start' | 'discuss' | 'assist';
+export interface MessageAction {
+  label: string;
+  kind: MessageActionKind;
+  taskId: string;
+}
+
 export interface Decision {
   version: string;
   time: string;
@@ -193,10 +270,7 @@ export interface HiringCase {
   position: string;
   status: CaseStatus;
   updatedLabel: string;
-  /** 排序用（epoch ms） */
   updatedAt: number;
-  /** 情境進度（僅陳先生的可推進情境使用） */
-  stage: number;
   participantIds: string[];
   /** 企業授權的正式核准者 */
   confirmerId: string;
@@ -205,6 +279,7 @@ export interface HiringCase {
   summary: SummaryItem[];
   plans: PlanOption[];
   tasks: CaseTask[];
+  suggested: SuggestedTask[];
   intent: IntentItem[];
   sources: SourceDoc[];
   changeLog: ChangeLog[];
@@ -215,8 +290,48 @@ export interface HiringCase {
 const now = Date.now();
 const H = 60 * 60 * 1000;
 
+// ── 資料清單（示例） ─────────────────────────────────────────
+
+const DOC_NAMES: [string, string][] = [
+  ['履歷表', '候選人'], ['學歷證明', '候選人'], ['經歷證明', '候選人'], ['身分證影本', '候選人'], ['個資蒐集同意書', '候選人'],
+  ['背景查核同意書', '候選人'], ['技術面試評分表', '面試官'], ['主管面試評分表', '面試官'], ['面試紀錄摘要', 'HR'], ['職務說明書', 'HR'],
+  ['薪資期望表', '候選人'], ['作品／專案說明', '候選人'], ['證照影本', '候選人'], ['推薦人聯絡資料', '候選人'], ['到職可行日確認', '候選人'],
+  ['前職離職證明', '候選人'], ['前職薪資證明', '候選人'], ['推薦人查核紀錄', 'HR'], ['競業條款聲明', '候選人'], ['健康聲明書', '候選人'],
+];
+
+const DOC_POLICY = '示例任用作業辦法 第 4 條：任用評估資料清單';
+const DOC_POLICY_VERSION = 'v2026.1';
+
+const missingReason = (provider: string) =>
+  provider === '候選人' ? '候選人尚未上傳' : provider === '面試官' ? '面試官尚未繳交' : 'HR 尚未彙整';
+
+/** 前 received 份已收到，其中 fixes 列出的為待補正，其餘未收到 */
+export const makeDocs = (received: number, fixes: Record<string, string>): DocItem[] =>
+  DOC_NAMES.map(([name, provider], i) => {
+    const base = { name, provider, policy: DOC_POLICY, policyVersion: DOC_POLICY_VERSION };
+    if (i >= received) return { ...base, status: '未收到' as const, reason: missingReason(provider) };
+    if (fixes[name]) return { ...base, status: '待修正' as const, reason: fixes[name] };
+    return { ...base, status: '符合' as const };
+  });
+
+export const docStats = (docs: DocItem[]) => ({
+  total: docs.length,
+  received: docs.filter(d => d.status !== '未收到').length,
+  ok: docs.filter(d => d.status === '符合').length,
+  missing: docs.filter(d => d.status === '未收到').length,
+  fix: docs.filter(d => d.status === '待修正').length,
+  review: docs.filter(d => d.status === '待檢核').length,
+});
+
+/** 「尚有 5 份未收到、2 份待補正」——用具體缺項取代不明確的比例 */
+export const docGapText = (docs: DocItem[]) => {
+  const s = docStats(docs);
+  const parts = [s.missing && `${s.missing} 份未收到`, s.fix && `${s.fix} 份待補正`, s.review && `${s.review} 份已收到待檢核`].filter(Boolean);
+  return parts.length ? `尚有 ${parts.join('、')}` : '資料皆已檢核符合';
+};
+
 // ─────────────────────────────────────────────────────────────
-// 林小姐｜產品設計師｜等待候選人回覆（方案已核准，Offer 已寄出）
+// 林小姐｜產品設計師｜等待候選人回覆
 // ─────────────────────────────────────────────────────────────
 
 const LIN_PLAN: PlanOption = {
@@ -232,95 +347,89 @@ export const LIN: HiringCase = {
   status: '等待候選人回覆',
   updatedLabel: '昨天',
   updatedAt: now - 26 * H,
-  stage: 0,
-  participantIds: ['agent', 'wang', 'wu', 'chou', 'lin'],
+  participantIds: ['agent', 'yun', 'wu', 'chou', 'lin'],
   confirmerId: 'lin',
   version: 'v4',
   versionTime: '10/12 09:45',
   decision: { version: 'v4', time: '10/11 13:40', confirmerId: 'lin', planId: 'D1' },
   summary: [
-    { label: '目前方案', value: '已核准（v4）', marker: 'approved' },
+    { label: '目前方案', value: '方案已核准（v4）', marker: 'approved' },
     { label: '任用條件', value: '月薪 7.5 萬，10/21 到職', marker: 'approved' },
-    { label: '候選人回覆', value: '尚未回覆，期限 10/16', marker: 'pending' },
     { label: '待決事項', value: '等待候選人回覆（期限 10/16）', marker: 'pending' },
-    { label: '下一步', value: '王小姐追蹤候選人回覆', marker: 'pending', ownerId: 'wang', taskId: 'lin-t4' },
+    { label: '下一步', value: '小芸追蹤候選人回覆', marker: 'pending', ownerId: 'yun', taskId: 'lin-t4' },
   ],
   plans: [LIN_PLAN],
   tasks: [
     {
-      id: 'lin-t1', origin: '制度要求', domain: '任用決策', title: '任用方案經授權者核准', detail: '林主管於 10/11 核准 v4', ownerId: 'lin', status: '已完成',
-      criteria: '授權核准者在「確認任用方案」完成核准', policyRef: '任用作業規範 第 6 條：任用條件須經部門決策者核准', evidence: '核准紀錄 v4（10/11 13:40）', discussKeyword: '核准',
+      id: 'lin-t1', kind: '制度任務', domain: '任用決策', icon: 'stamp', title: '任用方案核准', doneLabel: '任用方案已核准（v4）', purpose: '任用條件需由決策者正式核准。',
+      ownerId: 'lin', status: '已完成', confirmVia: 'decision', conditionSource: '示例管理辦法：任用條件須經部門決策者核准',
+      completion: { time: '10/11 13:40', byId: 'lin', planVersion: 'v4', summary: '核准任用方案 v4' },
     },
     {
-      id: 'lin-t2', origin: '制度要求', domain: '任用要求與履行', title: '面試評估紀錄', detail: '作品集、設計實作、主管面試皆已完成', ownerId: 'chou', status: '已完成',
-      criteria: '至少一場專業面試與一場主管面試，並有書面結論', policyRef: '任用作業規範 第 3 條', evidence: '面試紀錄 10/08', sourceIds: ['lin-job'],
+      id: 'lin-t2', kind: '制度任務', domain: '任用要求與履行', icon: 'clipboard', title: '面試評估紀錄', doneLabel: '面試結果已整理', purpose: '任用前需有專業面試與主管面試的書面結論。',
+      ownerId: 'chou', status: '已完成', conditionSource: '示例管理辦法：至少一場專業面試與一場主管面試',
+      completion: { time: '10/08 18:30', byId: 'chou', planVersion: 'v1', summary: '作品集、設計實作、主管面試完成' },
     },
     {
-      id: 'lin-t3', origin: '制度要求', domain: '聘用共識', title: '寄送書面 Offer', detail: '10/11 由王小姐寄出', ownerId: 'wang', status: '已完成',
-      criteria: '依已核准方案寄出書面 Offer，註明回覆期限', policyRef: '任用作業規範 第 7 條', evidence: 'Offer 寄送紀錄 10/11', sourceIds: ['lin-offer'],
+      id: 'lin-t3', kind: '制度任務', domain: '聘用共識', icon: 'mail', title: '寄送書面 Offer', doneLabel: 'Offer 已寄出', purpose: '依已核准方案寄出書面 Offer，並註明回覆期限。',
+      ownerId: 'yun', status: '已完成', conditionSource: '示例管理辦法：Offer 須依核准方案寄出',
+      completion: { time: '10/11 16:05', byId: 'yun', planVersion: 'v4', summary: '寄出 Offer，回覆期限 10/16' },
     },
     {
-      id: 'lin-t4', origin: '本案補充', domain: '聘用共識', title: '追蹤候選人回覆', detail: '候選人正在比較另一份 Offer', ownerId: 'wang', status: '等待前置', waitingFor: '候選人於 10/16 前回覆',
-      criteria: '取得候選人接受或婉拒的回覆', impact: '決定是否啟動到職準備', sourceIds: ['lin-intent'], evidence: '10/12 電話：會在本週內回覆', discussKeyword: '回覆',
+      id: 'lin-t4', kind: '本案任務', domain: '聘用共識', icon: 'message', title: '追蹤候選人回覆', progressName: '候選人回覆', waitName: '候選人回覆', purpose: '候選人正在比較另一份 Offer，需在期限前取得回覆。',
+      ownerId: 'yun', status: '進行中', unlocks: ['lin-t5'], conditionSource: '本案條件：取得候選人接受或婉拒的回覆', actionLabel: '記錄候選人回覆', discussKeyword: '回覆',
+      evidence: ['10/12 電話：候選人表示本週內回覆'],
     },
     {
-      id: 'lin-t5', origin: '制度要求', domain: '任用要求與履行', title: '到職資料', detail: '候選人接受後啟動', ownerId: 'wang', status: '尚未啟動',
-      criteria: '收齊到職資料 20 份', policyRef: '到職作業規範 第 2 條', dependsOn: ['lin-t4'],
+      id: 'lin-t5', kind: '制度任務', domain: '任用要求與履行', icon: 'folder', title: '準備到職資料', progressName: '到職資料', purpose: '到職前需收齊到職資料。',
+      ownerId: 'yun', status: '尚未啟動', dependsOn: ['lin-t4'], startCondition: '候選人接受 Offer 後', actionLabel: '查看缺項',
+      conditionSource: '示例管理辦法：到職前收齊到職資料（份數為示例值）',
     },
   ],
+  suggested: [],
   intent: [
     { label: '期望月薪', value: '7～8 萬', marker: 'candidate' },
     { label: '目前狀態', value: '同時在比較另一份 Offer', marker: 'candidate' },
     { label: '是否接受', value: '尚未回覆', marker: 'pending' },
-    { label: '來源', value: 'HR 王小姐電話溝通紀錄（10/12）', marker: 'recorded' },
+    { label: '來源', value: 'HR 小芸電話溝通紀錄（10/12）', marker: 'recorded' },
   ],
   sources: [
     {
-      id: 'lin-job', title: '原職缺：產品設計師', kind: '職缺', meta: '職缺 v1・HR 王小姐維護・09/20',
+      id: 'lin-job', title: '原職缺：產品設計師', kind: '職缺', meta: '職缺 v1・HR 小芸維護・09/20',
       excerpt: '月薪 6.5～8 萬。職責：產品介面與互動設計、設計系統維護、使用者研究協作。',
-      fields: [
-        ['職缺名稱', '產品設計師'], ['職缺版本', 'v1（09/20 建立）'], ['部門', '產品設計部'], ['薪資範圍', '月薪 6.5～8 萬'],
-        ['工作內容', '1. 產品介面與互動設計\n2. 設計系統維護\n3. 使用者研究協作'], ['維護者', 'HR 王小姐'],
-      ],
+      fields: [['職缺名稱', '產品設計師'], ['薪資範圍', '月薪 6.5～8 萬'], ['工作內容', '1. 產品介面與互動設計\n2. 設計系統維護\n3. 使用者研究協作'], ['維護者', 'HR 小芸']],
     },
     {
-      id: 'lin-offer', title: 'Offer 寄送紀錄', kind: 'Offer 紀錄', meta: 'HR 王小姐・10/11',
+      id: 'lin-offer', title: 'Offer 寄送紀錄', kind: 'Offer 紀錄', meta: 'HR 小芸・10/11',
       excerpt: '依已核准的任用方案 v4 寄出：產品設計師，月薪 7.5 萬，10/21 到職，回覆期限 10/16。',
-      fields: [
-        ['依據方案', '任用方案 v4（林主管 10/11 13:40 核准）'], ['職位', '產品設計師'], ['月薪', '7.5 萬'],
-        ['到職日', '10/21'], ['回覆期限', '10/16'], ['寄送者', 'HR 王小姐・10/11 16:05'],
-      ],
+      fields: [['依據方案', '任用方案 v4（林主管 10/11 13:40 核准）'], ['月薪', '7.5 萬'], ['到職日', '10/21'], ['回覆期限', '10/16'], ['寄送者', 'HR 小芸・10/11 16:05']],
     },
     {
-      id: 'lin-intent', title: '候選人意向', kind: '溝通紀錄', meta: 'HR 王小姐電話溝通・10/12',
+      id: 'lin-intent', title: '候選人意向', kind: '溝通紀錄', meta: 'HR 小芸電話溝通・10/12',
       excerpt: '表示會在本週內回覆，目前也在比較另一份 Offer。未提及對薪資的異議。',
-      fields: [
-        ['溝通方式', '電話'], ['時間', '10/12 09:20'], ['記錄者', 'HR 王小姐'],
-        ['候選人表達', '會在本週內回覆，目前也在比較另一份 Offer。'], ['未提及', '對薪資的異議'],
-      ],
+      fields: [['溝通方式', '電話'], ['時間', '10/12 09:20'], ['候選人表達', '會在本週內回覆，目前也在比較另一份 Offer。'], ['未提及', '對薪資的異議']],
     },
   ],
   changeLog: [
     { version: 'v4', time: '10/11 13:40', actor: '林主管', change: '正式核准任用方案：月薪 7.5 萬、10/21 到職', marker: 'approved' },
     { version: 'v3', time: '10/10 17:20', actor: 'Agent', change: '依面試結果與職缺預算提出任用方案', marker: 'agent' },
-    { version: 'v2', time: '10/09 11:00', actor: '王小姐', change: '加入候選人期望月薪 7～8 萬', marker: 'candidate' },
-    { version: 'v1', time: '10/08 18:30', actor: 'Agent', change: '依面試紀錄建立任用討論，周經理建議錄用', marker: 'recorded' },
+    { version: 'v2', time: '10/09 11:00', actor: '小芸', change: '加入候選人期望月薪 7～8 萬', marker: 'candidate' },
   ],
   messages: [
-    { id: 'lin-1', authorId: 'agent', time: '10/11 16:10', text: '林主管已核准任用方案 v4，Offer 已由王小姐寄出。候選人回覆期限為 10/16。', sources: ['lin-offer'], plans: [LIN_PLAN] },
-    { id: 'lin-2', authorId: 'wang', time: '10/12 09:30', text: '已和林小姐通過電話，她說這週內會回覆，目前也在比較另一份 Offer。' },
+    { id: 'lin-1', authorId: 'agent', time: '10/11 16:10', text: '林主管已核准任用方案 v4，Offer 已由小芸寄出。候選人回覆期限為 10/16。', sources: ['lin-offer'], plans: [LIN_PLAN] },
+    { id: 'lin-2', authorId: 'yun', time: '10/12 09:30', text: '已和林小姐通過電話，她說這週內會回覆，目前也在比較另一份 Offer。' },
     { id: 'lin-3', authorId: 'chou', time: '10/12 09:42', text: '如果她在意薪資，還有沒有空間再談？' },
     {
       id: 'lin-4', authorId: 'agent', time: '10/12 09:45',
       text: '已核准的方案 v4 月薪為 7.5 萬，若要調整需重新提出方案並由林主管再次核准，現有共識不會因對話改變。目前紀錄中候選人未對薪資提出異議，建議先等候選人回覆。',
       sources: ['lin-intent', 'lin-job'],
-      followUp: { text: '候選人回覆後請更新意向，我會同步目前共識。', mentionId: 'wang' },
+      followUp: { text: '候選人回覆後請更新意向，我會同步目前共識。', mentionId: 'yun' },
     },
   ],
 };
 
 // ─────────────────────────────────────────────────────────────
-// 張先生｜資料分析師｜已核准任用（候選人已接受，到職準備中）
+// 張先生｜資料分析師｜已核准任用（到職準備中）
 // ─────────────────────────────────────────────────────────────
 
 const CHANG_PLAN: PlanOption = {
@@ -336,44 +445,47 @@ export const CHANG: HiringCase = {
   status: '已核准任用',
   updatedLabel: '10/08',
   updatedAt: now - 5 * 24 * H,
-  stage: 0,
-  participantIds: ['agent', 'wang', 'huang', 'lin'],
+  participantIds: ['agent', 'yun', 'huang', 'lin'],
   confirmerId: 'lin',
   version: 'v3',
   versionTime: '10/08 10:20',
   decision: { version: 'v2', time: '10/06 15:10', confirmerId: 'lin', planId: 'D1' },
   summary: [
-    { label: '目前方案', value: '已核准（v2）', marker: 'approved' },
+    { label: '目前方案', value: '方案已核准（v2）', marker: 'approved' },
     { label: '任用條件', value: '月薪 6.8 萬，10/20 到職', marker: 'approved' },
-    { label: '候選人回覆', value: '已接受（10/07）', marker: 'candidate' },
-    { label: '待決事項', value: '到職資料還差 5 份、第一週工作未安排', marker: 'pending' },
+    { label: '待決事項', value: '第一週工作尚未安排', marker: 'pending' },
     { label: '下一步', value: '黃經理安排第一週工作', marker: 'pending', ownerId: 'huang', taskId: 'chang-t5' },
   ],
   plans: [CHANG_PLAN],
   tasks: [
     {
-      id: 'chang-t1', origin: '制度要求', domain: '任用決策', title: '任用方案經授權者核准', detail: '林主管於 10/06 核准 v2', ownerId: 'lin', status: '已完成',
-      criteria: '授權核准者在「確認任用方案」完成核准', policyRef: '任用作業規範 第 6 條：任用條件須經部門決策者核准', evidence: '核准紀錄 v2（10/06 15:10）',
+      id: 'chang-t1', kind: '制度任務', domain: '任用決策', icon: 'stamp', title: '任用方案核准', doneLabel: '任用方案已核准（v2）', purpose: '任用條件需由決策者正式核准。',
+      ownerId: 'lin', status: '已完成', confirmVia: 'decision', conditionSource: '示例管理辦法：任用條件須經部門決策者核准',
+      completion: { time: '10/06 15:10', byId: 'lin', planVersion: 'v2', summary: '核准任用方案 v2' },
     },
     {
-      id: 'chang-t2', origin: '制度要求', domain: '聘用共識', title: '候選人書面接受 Offer', detail: '10/07 以 Email 回覆接受', ownerId: 'wang', status: '已完成',
-      criteria: '取得候選人書面接受', policyRef: '任用作業規範 第 7 條', evidence: '候選人 Email 10/07', sourceIds: ['chang-accept'],
+      id: 'chang-t2', kind: '制度任務', domain: '聘用共識', icon: 'mail', title: '候選人書面接受 Offer', doneLabel: '候選人已接受 Offer', purpose: '取得候選人書面接受，才能進入到職準備。',
+      ownerId: 'yun', status: '已完成', conditionSource: '示例管理辦法：取得候選人書面接受',
+      completion: { time: '10/07 11:02', byId: 'yun', planVersion: 'v2', summary: '候選人以 Email 接受' },
     },
     {
-      id: 'chang-t3', origin: '制度要求', domain: '任用要求與履行', title: '到職資料', detail: '還差 5 份：健康檢查報告、前職離職證明等', ownerId: 'wang', status: '待補充',
-      progress: { done: 15, total: 20, unit: '份', label: '已收到' },
-      criteria: '到職前收齊到職資料 20 份', policyRef: '到職作業規範 第 2 條',
-      evidence: '已收到 15 份；缺健康檢查報告、前職離職證明、存摺影本、眷屬資料、緊急聯絡人表', impact: '未收齊不得辦理報到', discussKeyword: '到職資料',
+      id: 'chang-t3', kind: '制度任務', domain: '任用要求與履行', icon: 'folder', title: '準備到職資料', progressName: '到職資料', purpose: '到職前需收齊並檢核到職資料。',
+      ownerId: 'yun', status: '待補充', actionLabel: '查看缺項', discussKeyword: '到職資料',
+      docs: makeDocs(15, { 學歷證明: '影本不清晰，需重新提供', 證照影本: '證照已過期，需提供最新版本' }),
+      conditionSource: '示例管理辦法：到職前收齊並通過檢核（份數為示例值）',
     },
     {
-      id: 'chang-t4', origin: '制度要求', domain: '任用要求與履行', title: '設備與系統權限申請', detail: '筆電、資料平台權限申請中', ownerId: 'huang', status: '待補充',
-      criteria: '到職前 3 個工作天完成設備與權限申請', policyRef: '到職作業規範 第 5 條', evidence: '已送出筆電申請；資料平台權限待補 IT 單號',
+      id: 'chang-t4', kind: '制度任務', domain: '任用要求與履行', icon: 'laptop', title: '設備與系統權限', progressName: '設備與權限', purpose: '讓新人到職當天就能開始工作。',
+      ownerId: 'huang', status: '進行中', conditionSource: '示例管理辦法：到職前 3 個工作天完成申請', actionLabel: '更新申請進度',
+      evidence: ['已送出筆電申請', '資料平台權限待補 IT 單號'],
     },
     {
-      id: 'chang-t5', origin: '本案補充', domain: '任用要求與履行', title: '第一週工作安排', detail: '黃經理表示先熟悉資料平台', ownerId: 'huang', status: '待補充',
-      criteria: '列出第一週每日安排與帶領人', impact: '讓新人到職當天知道要做什麼', evidence: '10/08 對話：先安排熟悉資料平台（尚無具體安排）', discussKeyword: '第一週',
+      id: 'chang-t5', kind: '本案任務', domain: '任用要求與履行', icon: 'calendar', title: '安排第一週工作', progressName: '第一週工作', purpose: '讓新人到職當天知道要做什麼、找誰。',
+      ownerId: 'huang', status: '可處理', conditionSource: '本案條件：列出第一週每日安排與帶領人', actionLabel: '安排第一週工作', discussKeyword: '第一週',
+      evidence: ['10/08 對話：先安排熟悉資料平台（尚無具體安排）'],
     },
   ],
+  suggested: [],
   intent: [
     { label: '是否接受', value: '已接受', marker: 'candidate' },
     { label: '到職日', value: '10/20', marker: 'candidate' },
@@ -381,9 +493,9 @@ export const CHANG: HiringCase = {
   ],
   sources: [
     {
-      id: 'chang-offer', title: 'Offer 寄送紀錄', kind: 'Offer 紀錄', meta: 'HR 王小姐・10/06',
+      id: 'chang-offer', title: 'Offer 寄送紀錄', kind: 'Offer 紀錄', meta: 'HR 小芸・10/06',
       excerpt: '依已核准的任用方案 v2 寄出：資料分析師，月薪 6.8 萬，10/20 到職。',
-      fields: [['依據方案', '任用方案 v2（林主管 10/06 15:10 核准）'], ['職位', '資料分析師'], ['月薪', '6.8 萬'], ['到職日', '10/20'], ['寄送者', 'HR 王小姐・10/06 17:30']],
+      fields: [['依據方案', '任用方案 v2（林主管 10/06 15:10 核准）'], ['月薪', '6.8 萬'], ['到職日', '10/20'], ['寄送者', 'HR 小芸・10/06 17:30']],
     },
     {
       id: 'chang-accept', title: '候選人回覆', kind: 'Email', meta: '候選人 Email・10/07',
@@ -392,23 +504,22 @@ export const CHANG: HiringCase = {
     },
   ],
   changeLog: [
-    { version: 'v3', time: '10/08 10:20', actor: '王小姐', change: '候選人已接受，進入到職準備', marker: 'candidate' },
+    { version: 'v3', time: '10/08 10:20', actor: '小芸', change: '候選人已接受，進入到職準備', marker: 'candidate' },
     { version: 'v2', time: '10/06 15:10', actor: '林主管', change: '正式核准任用方案：月薪 6.8 萬、10/20 到職', marker: 'approved' },
-    { version: 'v1', time: '10/04 17:00', actor: 'Agent', change: '依面試紀錄建立任用討論並提出任用方案', marker: 'agent' },
   ],
   messages: [
     { id: 'chang-1', authorId: 'agent', time: '10/07 18:10', text: '候選人已回覆接受 Offer，表示 10/20 到職。任用方案 v2 已由林主管核准，目前進入到職準備。', sources: ['chang-accept', 'chang-offer'], plans: [CHANG_PLAN] },
-    { id: 'chang-2', authorId: 'wang', time: '10/08 10:15', text: '到職文件已寄出，候選人也簽回了。' },
+    { id: 'chang-2', authorId: 'yun', time: '10/08 10:15', text: 'Offer 相關文件已寄出，候選人也簽回了。' },
     { id: 'chang-3', authorId: 'huang', time: '10/08 10:18', text: '第一週我會安排他先熟悉資料平台。' },
     {
       id: 'chang-4', authorId: 'agent', time: '10/08 10:20',
-      text: '已更新共識：Offer 相關文件已簽回。到職資料目前收到 15／20 份，另有設備與系統權限申請、第一週工作安排尚未完成。',
-      followUp: { text: '第一週的工作安排確定後可以貼在這裡，我會加進到職準備。', mentionId: 'huang' },
+      text: '已更新共識：到職資料收到 15／20 份，其中 13 份符合要求；設備與系統權限申請中；第一週工作尚未安排。',
+      followUp: { text: '第一週的工作安排確定後可以貼在這裡，我會加進任務日誌。', mentionId: 'huang' },
     },
   ],
 };
 
-/** 新增任用討論：空白草稿，尚未帶入人選 */
+/** 新增任用討論：空白草稿 */
 export const makeDraftCase = (id: string, userId: string): HiringCase => ({
   id,
   candidate: '新任用討論',
@@ -416,7 +527,6 @@ export const makeDraftCase = (id: string, userId: string): HiringCase => ({
   status: '討論草稿',
   updatedLabel: '剛剛',
   updatedAt: Date.now(),
-  stage: 0,
   participantIds: userId === 'agent' ? ['agent'] : ['agent', userId],
   confirmerId: 'lin',
   version: 'v0',
@@ -424,6 +534,7 @@ export const makeDraftCase = (id: string, userId: string): HiringCase => ({
   summary: [],
   plans: [],
   tasks: [],
+  suggested: [],
   intent: [],
   sources: [],
   changeLog: [],
