@@ -1,7 +1,10 @@
 /** 任用決策空間共用小元件：頭像、標示、按鈕、原始紀錄視窗 */
 import React, { useEffect } from 'react';
-import { Sparkles, X, FileText } from 'lucide-react';
-import { Marker, MARKER_LABEL, Participant, RoleKey, SourceDoc } from './hiringMock';
+import {
+  Sparkles, X, FileText, Check, Hourglass, Play, LoaderCircle, CircleDashed, Circle, CircleCheck,
+  Compass, Scale, Stamp, FolderOpen, FileSignature, MessagesSquare, ClipboardCheck, UsersRound, Laptop, CalendarDays, Mail,
+} from 'lucide-react';
+import { Marker, MARKER_LABEL, Participant, RoleKey, SourceDoc, TaskStatus, TaskIcon } from './hiringMock';
 
 const AVATAR_TONE: Record<RoleKey, string> = {
   agent: 'bg-primary-light text-primary',
@@ -57,13 +60,57 @@ export const MarkerBadge: React.FC<{ marker: Marker; label?: string }> = ({ mark
   </span>
 );
 
-export const MARKER_HELP: { marker: Marker; text: string }[] = [
-  { marker: 'agent', text: 'Agent 提出，尚未經人確認' },
-  { marker: 'pending', text: '需討論或補資料' },
-  { marker: 'candidate', text: '候選人自己表達，不代表企業同意' },
-  { marker: 'recorded', text: '有資料來源，不代表企業同意' },
-  { marker: 'approved', text: '授權者正式核准' },
-];
+/**
+ * 任務狀態：圖示＋文字＋底色，不只靠顏色辨識
+ * 可處理／進行中用品牌色與綠色帶出動能；等待與尚未啟動維持低調
+ */
+const TASK_TONE: Record<TaskStatus, string> = {
+  可處理: 'bg-primary-light text-blue-700 border-blue-200',
+  進行中: 'bg-blue-50 text-blue-700 border-blue-200',
+  待補充: 'bg-warning-light text-text-main border-yellow-200',
+  等待前置: 'bg-bg-base text-text-sub border-neutral-border-light',
+  尚未啟動: 'bg-bg-card text-text-sub border-neutral-border border-dashed',
+  已完成: 'bg-success-light text-success border-green-100',
+};
+
+const TASK_STATUS_ICON: Record<TaskStatus, React.ComponentType<{ className?: string }>> = {
+  可處理: Play,
+  進行中: LoaderCircle,
+  待補充: CircleDashed,
+  等待前置: Hourglass,
+  尚未啟動: Circle,
+  已完成: CircleCheck,
+};
+
+export const TaskStatusBadge: React.FC<{ status: TaskStatus; label?: string }> = ({ status, label }) => {
+  const Icon = TASK_STATUS_ICON[status];
+  return (
+    <span className={`inline-flex items-center gap-1 h-6 px-2 rounded-full border text-xs font-medium whitespace-nowrap ${TASK_TONE[status]}`}>
+      <Icon className="w-3 h-3" />
+      {label ?? status}
+    </span>
+  );
+};
+
+const TASK_ICONS: Record<TaskIcon, React.ComponentType<{ className?: string }>> = {
+  compass: Compass, scale: Scale, stamp: Stamp, folder: FolderOpen, signature: FileSignature, message: MessagesSquare,
+  clipboard: ClipboardCheck, users: UsersRound, laptop: Laptop, calendar: CalendarDays, mail: Mail,
+};
+
+/** 任務圖示：圓潤底色圓形；完成時轉為綠色勾 */
+export const TaskIconCircle: React.FC<{ icon: TaskIcon; status: TaskStatus; size?: 'md' | 'lg'; pop?: boolean }> = ({ icon, status, size = 'md', pop }) => {
+  const Icon = status === '已完成' ? Check : TASK_ICONS[icon];
+  const tone = status === '已完成' ? 'bg-success-light text-success'
+    : status === '可處理' || status === '進行中' ? 'bg-primary-light text-primary'
+    : status === '待補充' ? 'bg-warning-light text-text-main'
+    : 'bg-bg-base text-text-sub';
+  const dim = size === 'lg' ? 'w-10 h-10' : 'w-8 h-8';
+  return (
+    <span className={`${dim} shrink-0 rounded-full flex items-center justify-center ${tone} ${pop ? 'jh-check-pop' : ''}`}>
+      <Icon className={size === 'lg' ? 'w-5 h-5' : 'w-4 h-4'} />
+    </span>
+  );
+};
 
 export const IconButton: React.FC<{
   label: string;
