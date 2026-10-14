@@ -2,21 +2,24 @@
  * JobHub 任用決策空間（桌面版高擬真原型，1440 × 1000）
  *
  * 每個對話圍繞一位任用人選；HR、面試官、用人主管、決策者與 Agent 共同參與。
- * Agent 是企業顧問：帶入資料、分析分歧、提出有依據的建議、維護目前共識。
+ * Agent 是企業顧問：帶入資料、分析分歧、提出有依據的建議、維護目前共識與本案任務。
  * 正式決策由企業授權者在「確認任用方案」對話框核准；聊天中的同意不視為核准。
- * 所有資料與動作皆為原型示意。
+ * 所有資料與動作皆為原型示意；側欄底部可切換檢視身分，用來走完多角色情境。
  */
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   PanelLeftClose, PanelLeftOpen, SquarePen, Sparkles, MessageSquare, Search, X, UserPlus, Paperclip, AtSign, ArrowUp,
-  FileSearch, ChevronDown, ChevronUp, MessageSquareReply, CornerDownRight, FileText, Check, ExternalLink,
+  FileSearch, ChevronDown, ChevronUp, MessageSquareReply, CornerDownRight, FileText, Check, ExternalLink, ListChecks,
+  ChevronsUpDown, ArrowRight,
 } from 'lucide-react';
 import {
-  PARTICIPANTS, CURRENT_USER_ID, SEED_CASES, HiringCase, CaseStatus, SourceDoc, ChatMessage,
-  SUGGESTED_ACTIONS, DRAFT_SUGGESTIONS, personOf, mockAgentReply, makeDraftCase,
+  PARTICIPANTS, DEFAULT_USER_ID, HiringCase, CaseStatus, SourceDoc, ChatMessage, PlanOption,
+  DRAFT_SUGGESTIONS, personOf, makeDraftCase, openTaskCount,
 } from './hiringMock';
-import { Avatar, MarkerBadge, IconButton, SourceRecordModal } from './hiringUi';
+import { SEED_CASES, agentTurn, approvePlan, suggestionsFor, Suggestion } from './caseFlow';
+import { Avatar, MarkerBadge, IconButton, SourceRecordModal, TaskStatusBadge } from './hiringUi';
 import ConsensusPanel, { ConfirmDecisionModal } from './ConsensusPanel';
+import WorkListDrawer from './WorkListDrawer';
 
 const nowLabel = () => {
   const d = new Date();
@@ -55,19 +58,65 @@ interface SearchHit {
   snippet?: string;
 }
 
+/** 側欄底部：目前身分＋切換（原型用，方便走完多角色情境） */
+const IdentitySwitcher: React.FC<{ userId: string; onChange: (id: string) => void }> = ({ userId, onChange }) => {
+  const [open, setOpen] = useState(false);
+  const me = personOf(userId);
+
+  useEffect(() => {
+    if (!open) return;
+    const close = () => setOpen(false);
+    window.addEventListener('click', close);
+    return () => window.removeEventListener('click', close);
+  }, [open]);
+
+  return (
+    <div className="relative shrink-0 border-t border-neutral-border-light p-3" onClick={e => e.stopPropagation()}>
+      {open && (
+        <div className="absolute left-3 right-3 bottom-full mb-2 z-30 rounded-md border border-neutral-border-light bg-bg-card shadow-lg py-1">
+          <p className="px-3 py-2 text-xs text-text-sub">切換檢視身分（原型示意）</p>
+          {PARTICIPANTS.filter(p => p.roleKey !== 'agent').map(p => (
+            <button
+              key={p.id}
+              type="button"
+              onClick={() => { onChange(p.id); setOpen(false); }}
+              className="w-full h-9 px-3 flex items-center gap-2 text-sm text-text-main hover:bg-bg-base"
+            >
+              <Avatar person={p} size="sm" />{p.name}<span className="text-xs text-text-sub">{p.role}</span>
+              {p.id === userId && <Check className="w-4 h-4 text-primary ml-auto" />}
+            </button>
+          ))}
+        </div>
+      )}
+      <button
+        type="button"
+        onClick={() => setOpen(v => !v)}
+        aria-expanded={open}
+        className="w-full rounded-md flex items-center gap-2 px-1 py-1 hover:bg-neutral-border-light"
+      >
+        <Avatar person={me} />
+        <span className="flex-1 min-w-0 text-left text-sm text-text-main truncate">{me.name}</span>
+        <span className="text-xs text-text-sub">{me.role}</span>
+        <ChevronsUpDown className="w-4 h-4 text-text-sub" />
+      </button>
+    </div>
+  );
+};
+
 const RecordSidebar: React.FC<{
   collapsed: boolean;
   cases: HiringCase[];
   activeId: string;
+  userId: string;
   focusSearchSignal: number;
   onToggle: () => void;
   onSearchFromRail: () => void;
   onNew: () => void;
   onSelect: (id: string) => void;
-}> = ({ collapsed, cases, activeId, focusSearchSignal, onToggle, onSearchFromRail, onNew, onSelect }) => {
+  onChangeUser: (id: string) => void;
+}> = ({ collapsed, cases, activeId, userId, focusSearchSignal, onToggle, onSearchFromRail, onNew, onSelect, onChangeUser }) => {
   const [query, setQuery] = useState('');
   const searchRef = useRef<HTMLInputElement>(null);
-  const me = personOf(CURRENT_USER_ID);
   const q = query.trim();
 
   useEffect(() => {
@@ -95,7 +144,6 @@ const RecordSidebar: React.FC<{
     .map(status => ({ status, items: hits.filter(h => h.c.status === status) }))
     .filter(g => g.items.length > 0);
 
-  // ── 收合：icon rail ──
   if (collapsed) {
     return (
       <aside className="h-full w-14 shrink-0 bg-bg-base border-r border-neutral-border-light flex flex-col items-center py-3 gap-2">
@@ -103,12 +151,11 @@ const RecordSidebar: React.FC<{
         <IconButton label="新增任用討論" onClick={onNew}><SquarePen className="w-5 h-5" /></IconButton>
         <IconButton label="搜尋任用紀錄（⌘K）" onClick={onSearchFromRail}><Search className="w-5 h-5" /></IconButton>
         <div className="flex-1" />
-        <Avatar person={me} />
+        <Avatar person={personOf(userId)} />
       </aside>
     );
   }
 
-  // ── 展開 ──
   return (
     <aside className="h-full w-64 shrink-0 bg-bg-base border-r border-neutral-border-light flex flex-col">
       <div className="h-14 shrink-0 flex items-center justify-between px-3">
@@ -182,9 +229,7 @@ const RecordSidebar: React.FC<{
                       <span className={`text-sm text-text-main truncate ${active ? 'font-medium' : ''}`}>
                         <Highlight text={caseTitle(c)} query={q} />
                       </span>
-                      {snippet && (
-                        <span className="text-xs text-text-sub line-clamp-2"><Highlight text={snippet} query={q} /></span>
-                      )}
+                      {snippet && <span className="text-xs text-text-sub line-clamp-2"><Highlight text={snippet} query={q} /></span>}
                     </button>
                   </li>
                 );
@@ -194,17 +239,13 @@ const RecordSidebar: React.FC<{
         ))}
       </nav>
 
-      <div className="shrink-0 border-t border-neutral-border-light p-3 flex items-center gap-2">
-        <Avatar person={me} />
-        <span className="flex-1 min-w-0 text-sm text-text-main truncate">{me.name}</span>
-        <span className="text-xs text-text-sub">{me.role}</span>
-      </div>
+      <IdentitySwitcher userId={userId} onChange={onChangeUser} />
     </aside>
   );
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 對話：訊息、依據、方案卡
+// 對話：訊息、依據、方案卡、共識更新
 // ─────────────────────────────────────────────────────────────────────────────
 
 /** 把 @姓名 標成提及樣式 */
@@ -222,11 +263,7 @@ const EvidenceList: React.FC<{ sources: SourceDoc[]; onOpen: (s: SourceDoc) => v
   <ul className="mt-2 flex flex-col gap-1 border-l-2 border-neutral-border-light pl-3">
     {sources.map(s => (
       <li key={s.id}>
-        <button
-          type="button"
-          onClick={() => onOpen(s)}
-          className="group w-full text-left rounded-md px-2 py-2 hover:bg-bg-base flex flex-col gap-1"
-        >
+        <button type="button" onClick={() => onOpen(s)} className="group w-full text-left rounded-md px-2 py-2 hover:bg-bg-base flex flex-col gap-1">
           <span className="flex items-center gap-2 text-sm font-medium text-text-main">
             <FileText className="w-4 h-4 text-text-sub" />{s.title}
             <span className="ml-auto inline-flex items-center gap-1 text-xs font-normal text-text-sub group-hover:text-primary">
@@ -241,67 +278,90 @@ const EvidenceList: React.FC<{ sources: SourceDoc[]; onOpen: (s: SourceDoc) => v
   </ul>
 );
 
+/** 方案卡：職位／薪酬／責任＋企業視角（能解決、需要配套、仍待解決） */
 const PlanCards: React.FC<{
   hiringCase: HiringCase;
-  planIds: string[];
+  plans: PlanOption[];
   replyingPlan: string | null;
-  onDiscuss: (id: string) => void;
-}> = ({ hiringCase: c, planIds, replyingPlan, onDiscuss }) => {
-  const plans = c.plans.filter(p => planIds.includes(p.id));
-  return (
-    <div className={`mt-3 grid gap-3 ${plans.length > 1 ? 'grid-cols-2' : 'grid-cols-1 max-w-md'}`}>
-      {plans.map(p => {
-        const active = replyingPlan === p.id;
-        const approved = p.marker === 'approved';
-        return (
-          <div key={p.id} className={`rounded-lg border bg-bg-card flex flex-col ${active ? 'border-primary' : 'border-neutral-border-light'}`}>
-            <div className="flex items-center justify-between gap-2 px-4 pt-3">
-              <span className="text-sm font-medium text-text-main">{p.title}</span>
-              {approved
-                ? <MarkerBadge marker="approved" label={`已核准 ${c.decision?.version ?? ''}`} />
-                : <MarkerBadge marker="agent" label="Agent 建議／未核准" />}
-            </div>
-            <dl className="px-4 py-3 flex flex-col gap-2 text-sm">
-              <div className="flex gap-3"><dt className="w-12 shrink-0 text-text-sub">職位</dt><dd className="text-text-main">{p.position}</dd></div>
-              <div className="flex gap-3"><dt className="w-12 shrink-0 text-text-sub">薪酬</dt><dd className="text-text-main">{p.salary}</dd></div>
-              <div className="flex gap-3"><dt className="w-12 shrink-0 text-text-sub">責任</dt><dd className="text-text-main">{p.scope}</dd></div>
-              <div className="flex gap-3"><dt className="w-12 shrink-0 text-text-sub">待確認</dt><dd className="text-text-main">{p.open}</dd></div>
-            </dl>
-            {approved && c.decision && (
-              <p className="px-4 pb-3 text-xs text-text-sub">{personOf(c.decision.confirmerId).name}於 {c.decision.time} 正式核准</p>
-            )}
-            <div className="mt-auto border-t border-neutral-border-light px-2 py-1">
-              <button
-                type="button"
-                onClick={() => onDiscuss(p.id)}
-                className={`h-8 px-2 rounded-md text-xs font-medium inline-flex items-center gap-1 hover:bg-bg-base ${active ? 'text-primary' : 'text-text-sub hover:text-text-main'}`}
-              >
-                <MessageSquareReply className="w-4 h-4" />
-                {active ? '正在回覆此方案' : '針對此方案討論'}
-              </button>
-            </div>
+  onDiscuss: (p: PlanOption) => void;
+}> = ({ hiringCase: c, plans, replyingPlan, onDiscuss }) => (
+  <div className={`mt-3 grid gap-3 ${plans.length > 1 ? 'grid-cols-2' : 'grid-cols-1 max-w-md'}`}>
+    {plans.map(p => {
+      const active = replyingPlan === p.id;
+      const approved = p.marker === 'approved';
+      return (
+        <div key={p.id} className={`rounded-lg border bg-bg-card flex flex-col ${active ? 'border-primary' : 'border-neutral-border-light'}`}>
+          <div className="flex items-center justify-between gap-2 px-4 pt-3">
+            <span className="text-sm font-medium text-text-main">{p.title}</span>
+            {approved
+              ? <MarkerBadge marker="approved" label={`已核准 ${c.decision?.version ?? ''}`} />
+              : <MarkerBadge marker="agent" label={p.confirmable ? 'Agent 建議／可送核准' : 'Agent 建議／未核准'} />}
           </div>
-        );
-      })}
+          <dl className="px-4 pt-3 flex flex-col gap-2 text-sm">
+            <div className="flex gap-3"><dt className="w-12 shrink-0 text-text-sub">職位</dt><dd className="text-text-main">{p.position}</dd></div>
+            <div className="flex gap-3"><dt className="w-12 shrink-0 text-text-sub">薪酬</dt><dd className="text-text-main">{p.salary}</dd></div>
+            <div className="flex gap-3"><dt className="w-12 shrink-0 text-text-sub">責任</dt><dd className="text-text-main">{p.scope}</dd></div>
+          </dl>
+          <dl className="mx-4 my-3 pt-3 border-t border-dashed border-neutral-border-light flex flex-col gap-2 text-sm">
+            <div className="flex gap-3"><dt className="w-16 shrink-0 text-text-sub">能解決</dt><dd className="text-text-main">{p.solves}</dd></div>
+            <div className="flex gap-3"><dt className="w-16 shrink-0 text-text-sub">需要配套</dt><dd className="text-text-main">{p.support}</dd></div>
+            <div className="flex gap-3"><dt className="w-16 shrink-0 text-text-sub">仍待解決</dt><dd className="text-text-main">{p.openIssues}</dd></div>
+          </dl>
+          {approved && c.decision && (
+            <p className="px-4 pb-3 text-xs text-text-sub">{personOf(c.decision.confirmerId).name}於 {c.decision.time} 正式核准</p>
+          )}
+          <div className="mt-auto border-t border-neutral-border-light px-2 py-1">
+            <button
+              type="button"
+              onClick={() => onDiscuss(p)}
+              className={`h-8 px-2 rounded-md text-xs font-medium inline-flex items-center gap-1 hover:bg-bg-base ${active ? 'text-primary' : 'text-text-sub hover:text-text-main'}`}
+            >
+              <MessageSquareReply className="w-4 h-4" />
+              {active ? '正在回覆此方案' : '針對此方案討論'}
+            </button>
+          </div>
+        </div>
+      );
+    })}
+  </div>
+);
+
+/** Agent 推進案件時，顯示這次更新了哪些任務 */
+const UpdateNotice: React.FC<{ updates: NonNullable<ChatMessage['updates']>; onOpenTasks: () => void }> = ({ updates, onOpenTasks }) => (
+  <div className="mt-3 rounded-md border border-neutral-border-light bg-bg-base px-4 py-3 flex flex-col gap-2">
+    <div className="flex items-center gap-2 text-xs text-text-sub">
+      <ListChecks className="w-4 h-4" />已更新目前任用共識 {updates.version} 與工作清單
+      <button type="button" onClick={onOpenTasks} className="ml-auto font-medium text-text-sub hover:text-primary">查看工作清單</button>
     </div>
-  );
-};
+    <ul className="flex flex-col gap-2">
+      {updates.tasks.map(t => (
+        <li key={t.title} className="flex items-center gap-2 text-sm text-text-main">
+          <span className="flex-1 min-w-0 truncate">{t.title}</span>
+          <TaskStatusBadge status={t.from} />
+          <ArrowRight className="w-3 h-3 text-text-sub shrink-0" />
+          <TaskStatusBadge status={t.to} />
+        </li>
+      ))}
+    </ul>
+  </div>
+);
 
 const MessageItem: React.FC<{
   hiringCase: HiringCase;
   msg: ChatMessage;
   replyingPlan: string | null;
-  onDiscuss: (id: string) => void;
+  onDiscuss: (p: PlanOption) => void;
+  highlighted: boolean;
   onOpenSource: (s: SourceDoc) => void;
-}> = ({ hiringCase: c, msg, replyingPlan, onDiscuss, onOpenSource }) => {
+  onOpenTasks: () => void;
+}> = ({ hiringCase: c, msg, replyingPlan, onDiscuss, highlighted, onOpenSource, onOpenTasks }) => {
   const [showEvidence, setShowEvidence] = useState(false);
   const author = personOf(msg.authorId);
   const isAgent = author.roleKey === 'agent';
-  const plan = msg.replyToPlan ? c.plans.find(p => p.id === msg.replyToPlan) : null;
   const sources = (msg.sources ?? []).map(id => c.sources.find(s => s.id === id)).filter((s): s is SourceDoc => !!s);
 
   return (
-    <article className="flex gap-3">
+    <article id={`msg-${msg.id}`} className={`flex gap-3 -mx-3 px-3 py-2 rounded-lg transition-colors duration-500 ${highlighted ? 'bg-primary-light' : ''}`}>
       <Avatar person={author} />
       <div className="flex-1 min-w-0">
         <header className="flex items-baseline gap-2">
@@ -310,13 +370,15 @@ const MessageItem: React.FC<{
           <span className="text-xs text-text-muted">{msg.time}</span>
         </header>
 
-        {plan && (
+        {msg.replyToPlan && (
           <div className="mt-1 inline-flex items-center gap-1 text-xs text-text-sub">
-            <CornerDownRight className="w-3 h-3" />回覆 {plan.title}：{plan.position}
+            <CornerDownRight className="w-3 h-3" />回覆 {msg.replyToPlan.label}
           </div>
         )}
 
         <p className="mt-1 text-base leading-7 text-text-main whitespace-pre-wrap break-words">{renderWithMentions(msg.text)}</p>
+
+        {msg.updates && <UpdateNotice updates={msg.updates} onOpenTasks={onOpenTasks} />}
 
         {sources.length > 0 && (
           <>
@@ -334,7 +396,7 @@ const MessageItem: React.FC<{
           </>
         )}
 
-        {msg.planIds && <PlanCards hiringCase={c} planIds={msg.planIds} replyingPlan={replyingPlan} onDiscuss={onDiscuss} />}
+        {msg.plans && <PlanCards hiringCase={c} plans={msg.plans} replyingPlan={replyingPlan} onDiscuss={onDiscuss} />}
 
         {msg.followUp && (
           <p className="mt-4 text-base leading-7 text-text-main">
@@ -352,22 +414,23 @@ const MessageItem: React.FC<{
 
 const Composer: React.FC<{
   hiringCase: HiringCase;
+  userId: string;
+  draft: string;
+  onDraft: (v: string) => void;
   busy: boolean;
-  replyingPlan: string | null;
+  replyPlan: PlanOption | null;
   onCancelPlan: () => void;
-  onSend: (text: string) => void;
+  onSend: () => void;
   onToast: (t: string) => void;
   inputRef: React.RefObject<HTMLTextAreaElement | null>;
-}> = ({ hiringCase: c, busy, replyingPlan, onCancelPlan, onSend, onToast, inputRef }) => {
-  const [draft, setDraft] = useState('');
+}> = ({ hiringCase: c, userId, draft, onDraft, busy, replyPlan, onCancelPlan, onSend, onToast, inputRef }) => {
   const [mentionOpen, setMentionOpen] = useState(false);
-  const replyPlan = replyingPlan ? c.plans.find(p => p.id === replyingPlan) : null;
 
   useEffect(() => {
     const el = inputRef.current;
     if (!el) return;
     el.style.height = 'auto';
-    el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
+    el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
   }, [draft, inputRef]);
 
   useEffect(() => {
@@ -377,17 +440,13 @@ const Composer: React.FC<{
     return () => window.removeEventListener('click', close);
   }, [mentionOpen]);
 
-  const submit = () => {
-    if (!draft.trim() || busy) return;
-    onSend(draft);
-    setDraft('');
-  };
-
   const insertMention = (name: string) => {
-    setDraft(d => `${d}${d && !d.endsWith(' ') ? ' ' : ''}@${name} `);
+    onDraft(`${draft}${draft && !draft.endsWith(' ') ? ' ' : ''}@${name} `);
     setMentionOpen(false);
     inputRef.current?.focus();
   };
+
+  const me = personOf(userId);
 
   return (
     <div>
@@ -408,11 +467,11 @@ const Composer: React.FC<{
           ref={inputRef}
           rows={2}
           value={draft}
-          onChange={e => setDraft(e.target.value)}
+          onChange={e => onDraft(e.target.value)}
           onKeyDown={e => {
             if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
               e.preventDefault();
-              submit();
+              onSend();
             }
           }}
           placeholder={c.status === '討論草稿' ? '輸入人選姓名與職位，或貼上面試紀錄…' : '補充資訊、討論方案，或請 Agent 分析…'}
@@ -425,7 +484,7 @@ const Composer: React.FC<{
             <IconButton label="@參與者" onClick={() => setMentionOpen(v => !v)} active={mentionOpen}><AtSign className="w-4 h-4" /></IconButton>
             {mentionOpen && (
               <ul className="absolute left-0 bottom-full mb-2 z-30 w-56 rounded-md border border-neutral-border-light bg-bg-card shadow-lg py-1">
-                {c.participantIds.filter(id => id !== CURRENT_USER_ID).map(id => {
+                {c.participantIds.filter(id => id !== userId).map(id => {
                   const p = personOf(id);
                   return (
                     <li key={id}>
@@ -438,12 +497,15 @@ const Composer: React.FC<{
               </ul>
             )}
           </div>
+          <span className="ml-auto mr-2 inline-flex items-center gap-1 text-xs text-text-sub">
+            以 <Avatar person={me} size="xs" />{me.name}身分發言
+          </span>
           <button
             type="button"
-            onClick={submit}
+            onClick={onSend}
             disabled={!draft.trim() || busy}
             aria-label="送出"
-            className="ml-auto w-8 h-8 rounded-full bg-primary text-white flex items-center justify-center hover:bg-primary-hover disabled:bg-neutral-border-light disabled:text-text-muted"
+            className="w-8 h-8 rounded-full bg-primary text-white flex items-center justify-center hover:bg-primary-hover disabled:bg-neutral-border-light disabled:text-text-muted"
           >
             <ArrowUp className="w-4 h-4" />
           </button>
@@ -461,14 +523,17 @@ const Composer: React.FC<{
 const HiringDecisionPage: React.FC = () => {
   const [cases, setCases] = useState<HiringCase[]>(SEED_CASES);
   const [activeId, setActiveId] = useState(SEED_CASES[0].id);
+  const [userId, setUserId] = useState(DEFAULT_USER_ID);
   const [collapsed, setCollapsed] = useState(false);
   const [focusSearchSignal, setFocusSearchSignal] = useState(0);
-  const [consensusOpen, setConsensusOpen] = useState(false);
+  const [workList, setWorkList] = useState<{ open: boolean; taskId: string | null }>({ open: false, taskId: null });
+  const [highlightMsgId, setHighlightMsgId] = useState<string | null>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [sourceView, setSourceView] = useState<SourceDoc | null>(null);
   const [inviteOpen, setInviteOpen] = useState(false);
   const [inviteEmail, setInviteEmail] = useState('');
-  const [replyingPlan, setReplyingPlan] = useState<string | null>(null);
+  const [draft, setDraft] = useState('');
+  const [replyingPlan, setReplyingPlan] = useState<PlanOption | null>(null);
   const [typingCaseId, setTypingCaseId] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -477,6 +542,8 @@ const HiringDecisionPage: React.FC = () => {
 
   const active = cases.find(c => c.id === activeId)!;
   const isEmptyDraft = active.status === '討論草稿' && active.messages.length === 0;
+  const openTasks = openTaskCount(active.tasks);
+  const suggestions = suggestionsFor(active, userId);
 
   const showToast = (text: string) => {
     setToast(text);
@@ -530,50 +597,107 @@ const HiringDecisionPage: React.FC = () => {
   const select = (id: string) => {
     setActiveId(id);
     setReplyingPlan(null);
-    setConsensusOpen(false);
+    setDraft('');
+    setWorkList(w => ({ ...w, taskId: null }));
   };
 
   const startNew = () => {
-    // 已有空白草稿就直接切過去，不重複建立
     const emptyDraft = cases.find(c => c.status === '討論草稿' && c.messages.length === 0);
     if (emptyDraft) { select(emptyDraft.id); return; }
-    const draft = makeDraftCase(newId('draft'));
-    setCases(prev => [draft, ...prev]);
-    select(draft.id);
+    const created = makeDraftCase(newId('draft'), userId);
+    setCases(prev => [created, ...prev]);
+    select(created.id);
     window.setTimeout(() => inputRef.current?.focus(), 0);
+  };
+
+  const openWorkList = (taskId: string | null = null) => {
+    // 窄螢幕：讓出左側欄，確保對話仍能和工作清單並排對照
+    if (window.innerWidth < 1280) setCollapsed(true);
+    setWorkList({ open: true, taskId });
+  };
+
+  /** 查看討論：捲到最近一則提到此任務的訊息，並短暫標亮 */
+  const viewDiscussion = (keyword: string) => {
+    const msg = [...active.messages].reverse().find(m => m.text.includes(keyword) || m.followUp?.text.includes(keyword));
+    if (!msg) { showToast('對話中還沒有相關討論'); return; }
+    document.getElementById(`msg-${msg.id}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    setHighlightMsgId(msg.id);
+    window.setTimeout(() => setHighlightMsgId(id => (id === msg.id ? null : id)), 2000);
   };
 
   const send = (raw: string) => {
     const text = raw.trim();
     if (!text || typingCaseId) return;
     const caseId = active.id;
-    const plan = replyingPlan ?? undefined;
-    const snapshot = active;
+    const plan = replyingPlan;
+    const author = userId;
+    const time = nowLabel();
     patchCase(caseId, c => ({
       ...c,
       // 草稿：以第一則訊息當暫定標題
       candidate: c.status === '討論草稿' && c.messages.length === 0 ? (text.length > 16 ? `${text.slice(0, 16)}…` : text) : c.candidate,
+      participantIds: c.participantIds.includes(author) ? c.participantIds : [...c.participantIds, author],
       updatedLabel: '剛剛',
       updatedAt: Date.now(),
-      messages: [...c.messages, { id: newId('m'), authorId: CURRENT_USER_ID, time: nowLabel(), text, replyToPlan: plan }],
+      messages: [...c.messages, {
+        id: newId('m'), authorId: author, time, text,
+        replyToPlan: plan ? { id: plan.id, label: `${plan.title}：${plan.position}` } : undefined,
+      }],
     }));
+    setDraft('');
     setReplyingPlan(null);
     setTypingCaseId(caseId);
     window.setTimeout(() => {
       setTypingCaseId(null);
-      patchCase(caseId, c => ({
-        ...c,
-        messages: [...c.messages, { id: newId('m'), authorId: 'agent', time: nowLabel(), text: mockAgentReply(snapshot, text, plan) }],
+      setCases(prev => prev.map(c => {
+        if (c.id !== caseId) return c;
+        const { next, reply } = agentTurn(c, author, text, time, plan?.id);
+        return { ...next, messages: [...next.messages, { id: newId('m'), authorId: 'agent', time: nowLabel(), ...reply }] };
       }));
     }, 1100);
   };
 
-  const discussPlan = (id: string) => {
-    setReplyingPlan(id);
+  const approve = () => {
+    const time = nowLabel();
+    setCases(prev => prev.map(c => {
+      if (c.id !== active.id) return c;
+      const result = approvePlan(c, time);
+      if (!result) return c;
+      return { ...result.next, updatedLabel: '剛剛', updatedAt: Date.now(), messages: [...result.next.messages, { id: newId('m'), authorId: 'agent', time, ...result.reply }] };
+    }));
+    setConfirmOpen(false);
+    showToast('已核准，正式決策已記錄');
+  };
+
+  const runSuggestion = (s: Suggestion) => {
+    if (s.action === 'send' && s.text) send(s.text);
+    if (s.action === 'fill' && s.text) { setDraft(s.text); inputRef.current?.focus(); }
+    if (s.action === 'confirm') setConfirmOpen(true);
+    if (s.action === 'tasks') openWorkList();
+  };
+
+  const discussPlan = (p: PlanOption) => {
+    setReplyingPlan(p);
     inputRef.current?.focus();
   };
 
   const busy = typingCaseId !== null;
+
+  const composer = (
+    <Composer
+      key={active.id}
+      hiringCase={active}
+      userId={userId}
+      draft={draft}
+      onDraft={setDraft}
+      busy={busy}
+      replyPlan={replyingPlan}
+      onCancelPlan={() => setReplyingPlan(null)}
+      onSend={() => send(draft)}
+      onToast={showToast}
+      inputRef={inputRef}
+    />
+  );
 
   return (
     <div className="h-screen w-screen flex bg-bg-card text-text-main overflow-hidden">
@@ -581,25 +705,40 @@ const HiringDecisionPage: React.FC = () => {
         collapsed={collapsed}
         cases={cases}
         activeId={activeId}
+        userId={userId}
         focusSearchSignal={focusSearchSignal}
         onToggle={() => setCollapsed(v => !v)}
         onSearchFromRail={openSearch}
         onNew={startNew}
         onSelect={select}
+        onChangeUser={id => { setUserId(id); showToast(`已切換為${personOf(id).name}（${personOf(id).role}）`); }}
       />
 
       <main className="flex-1 min-w-0 h-full flex flex-col">
-        {/* 頂部：人選、職位、參與者、邀請成員 */}
+        {/* 頂部：人選、職位、本案任務、參與者、邀請成員 */}
         <header className="h-14 shrink-0 px-4 flex items-center gap-4">
           <div className="flex items-center gap-2 min-w-0">
             <h1 className="text-sm font-medium text-text-main truncate">{caseTitle(active)}</h1>
             <span className={`h-5 px-2 rounded-sm text-xs font-medium inline-flex items-center whitespace-nowrap ${STATUS_TONE[active.status]}`}>{active.status}</span>
           </div>
           <div className="ml-auto flex items-center gap-3">
+            {active.tasks.length > 0 && (
+              <button
+                type="button"
+                onClick={() => (workList.open ? setWorkList(w => ({ ...w, open: false })) : openWorkList())}
+                aria-pressed={workList.open}
+                className={`h-9 px-3 rounded-md text-sm font-medium inline-flex items-center gap-2 whitespace-nowrap hover:bg-neutral-border-light ${workList.open ? 'bg-neutral-border-light text-text-main' : 'text-text-main'}`}
+              >
+                <ListChecks className="w-4 h-4 text-text-sub" />
+                本案工作清單
+                <span className={`h-5 px-2 rounded-full text-xs inline-flex items-center ${openTasks ? 'bg-warning-light text-text-main' : 'bg-success-light text-success'}`}>
+                  {openTasks ? `${openTasks} 項未完成` : '全部完成'}
+                </span>
+              </button>
+            )}
             <div className="flex -space-x-2" aria-label="參與者">
               {active.participantIds.map(id => <Avatar key={id} person={personOf(id)} size="sm" ring />)}
             </div>
-            <span className="text-xs text-text-sub whitespace-nowrap">{active.participantIds.length} 位參與</span>
             <div className="relative" onClick={e => e.stopPropagation()}>
               <button
                 type="button"
@@ -649,15 +788,12 @@ const HiringDecisionPage: React.FC = () => {
           <ConsensusPanel
             key={active.id}
             hiringCase={active}
-            expanded={consensusOpen}
-            onToggle={() => setConsensusOpen(v => !v)}
+            currentUserId={userId}
             onOpenConfirm={() => setConfirmOpen(true)}
-            onOpenSource={setSourceView}
           />
         )}
 
         {isEmptyDraft ? (
-          /* 新增任用討論：空狀態 */
           <div className="flex-1 overflow-y-auto flex items-center justify-center px-4">
             <div className="w-full max-w-3xl flex flex-col items-center gap-8 pb-16">
               <div className="flex flex-col items-center gap-3 text-center">
@@ -665,28 +801,12 @@ const HiringDecisionPage: React.FC = () => {
                   <Sparkles className="w-6 h-6" />
                 </div>
                 <h2 className="text-2xl font-bold text-text-main">要討論哪一位任用人選？</h2>
-                <p className="text-sm text-text-sub">帶入人選後，Agent 會整理面試紀錄與候選人意向，建立目前任用共識。</p>
+                <p className="text-sm text-text-sub">帶入人選後，Agent 會整理面試紀錄與候選人意向，建立目前任用共識與本案任務。</p>
               </div>
-              <div className="w-full">
-                <Composer
-                  key={active.id}
-                  hiringCase={active}
-                  busy={busy}
-                  replyingPlan={null}
-                  onCancelPlan={() => {}}
-                  onSend={send}
-                  onToast={showToast}
-                  inputRef={inputRef}
-                />
-              </div>
+              <div className="w-full">{composer}</div>
               <div className="flex flex-wrap justify-center gap-2">
                 {DRAFT_SUGGESTIONS.map(s => (
-                  <button
-                    key={s}
-                    type="button"
-                    onClick={() => send(s)}
-                    className="h-9 px-4 rounded-full border border-neutral-border-light text-sm text-text-sub hover:bg-bg-base hover:text-text-main"
-                  >
+                  <button key={s} type="button" onClick={() => send(s)} className="h-9 px-4 rounded-full border border-neutral-border-light text-sm text-text-sub hover:bg-bg-base hover:text-text-main">
                     {s}
                   </button>
                 ))}
@@ -695,17 +815,18 @@ const HiringDecisionPage: React.FC = () => {
           </div>
         ) : (
           <>
-            {/* 中央多人對話 */}
             <div ref={scrollRef} className="flex-1 overflow-y-auto">
-              <div className="max-w-3xl mx-auto px-4 py-6 flex flex-col gap-6">
+              <div className="max-w-3xl mx-auto px-4 py-6 flex flex-col gap-4">
                 {active.messages.map(m => (
                   <MessageItem
                     key={m.id}
                     hiringCase={active}
                     msg={m}
-                    replyingPlan={replyingPlan}
+                    replyingPlan={replyingPlan?.id ?? null}
                     onDiscuss={discussPlan}
+                    highlighted={highlightMsgId === m.id}
                     onOpenSource={setSourceView}
+                    onOpenTasks={() => openWorkList()}
                   />
                 ))}
                 {typingCaseId === active.id && (
@@ -717,41 +838,55 @@ const HiringDecisionPage: React.FC = () => {
               </div>
             </div>
 
-            {/* 底部輸入 */}
             <div className="shrink-0 px-4 pb-4">
               <div className="max-w-3xl mx-auto flex flex-col gap-3">
-                {active.plans.length > 0 && (
+                {suggestions.length > 0 && (
                   <div className="flex flex-wrap gap-2">
-                    {SUGGESTED_ACTIONS.map(a => (
+                    {suggestions.map(s => (
                       <button
-                        key={a}
+                        key={s.label}
                         type="button"
-                        onClick={() => send(a)}
-                        disabled={busy}
-                        className="h-9 px-4 rounded-full border border-neutral-border-light text-sm text-text-sub hover:bg-bg-base hover:text-text-main disabled:opacity-50"
+                        onClick={() => runSuggestion(s)}
+                        disabled={busy && s.action === 'send'}
+                        className={`h-9 px-4 rounded-full border text-sm disabled:opacity-50 ${
+                          s.action === 'fill' || s.action === 'confirm'
+                            ? 'border-primary text-primary hover:bg-primary-light'
+                            : 'border-neutral-border-light text-text-sub hover:bg-bg-base hover:text-text-main'
+                        }`}
                       >
-                        {a}
+                        {s.label}
                       </button>
                     ))}
                   </div>
                 )}
-                <Composer
-                  key={active.id}
-                  hiringCase={active}
-                  busy={busy}
-                  replyingPlan={replyingPlan}
-                  onCancelPlan={() => setReplyingPlan(null)}
-                  onSend={send}
-                  onToast={showToast}
-                  inputRef={inputRef}
-                />
+                {composer}
               </div>
             </div>
           </>
         )}
       </main>
 
-      {confirmOpen && <ConfirmDecisionModal hiringCase={active} onClose={() => setConfirmOpen(false)} />}
+      {workList.open && active.tasks.length > 0 && (
+        <WorkListDrawer
+          hiringCase={active}
+          currentUserId={userId}
+          selectedTaskId={workList.taskId}
+          onSelectTask={taskId => setWorkList({ open: true, taskId })}
+          onClose={() => setWorkList({ open: false, taskId: null })}
+          onOpenSource={setSourceView}
+          onViewDiscussion={viewDiscussion}
+        />
+      )}
+
+      {confirmOpen && (
+        <ConfirmDecisionModal
+          hiringCase={active}
+          currentUserId={userId}
+          onClose={() => setConfirmOpen(false)}
+          onApprove={approve}
+          onRemind={() => { setConfirmOpen(false); showToast(`已提醒${personOf(active.confirmerId).name}核准（原型示意）`); }}
+        />
+      )}
       {sourceView && <SourceRecordModal source={sourceView} onClose={() => setSourceView(null)} />}
 
       {toast && (

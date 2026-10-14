@@ -1,7 +1,7 @@
 /** 任用決策空間共用小元件：頭像、標示、按鈕、原始紀錄視窗 */
 import React, { useEffect } from 'react';
-import { Sparkles, X, FileText } from 'lucide-react';
-import { Marker, MARKER_LABEL, Participant, RoleKey, SourceDoc } from './hiringMock';
+import { Sparkles, X, FileText, Check, Hourglass } from 'lucide-react';
+import { Marker, MARKER_LABEL, Participant, RoleKey, SourceDoc, TaskStatus } from './hiringMock';
 
 const AVATAR_TONE: Record<RoleKey, string> = {
   agent: 'bg-primary-light text-primary',
@@ -57,13 +57,22 @@ export const MarkerBadge: React.FC<{ marker: Marker; label?: string }> = ({ mark
   </span>
 );
 
-export const MARKER_HELP: { marker: Marker; text: string }[] = [
-  { marker: 'agent', text: 'Agent 提出，尚未經人確認' },
-  { marker: 'pending', text: '需討論或補資料' },
-  { marker: 'candidate', text: '候選人自己表達，不代表企業同意' },
-  { marker: 'recorded', text: '有資料來源，不代表企業同意' },
-  { marker: 'approved', text: '授權者正式核准' },
-];
+/** 本案任務狀態（與共識標示分開，不再一律叫「待決」） */
+const TASK_TONE: Record<TaskStatus, string> = {
+  待補充: 'bg-warning-light text-text-main border-yellow-200',
+  等待前置: 'bg-bg-base text-text-sub border-neutral-border-light',
+  待決策: 'bg-primary-light text-blue-700 border-blue-200',
+  尚未啟動: 'bg-bg-card text-text-sub border-neutral-border border-dashed',
+  已完成: 'bg-success-light text-success border-green-100',
+};
+
+export const TaskStatusBadge: React.FC<{ status: TaskStatus }> = ({ status }) => (
+  <span className={`inline-flex items-center gap-1 h-5 px-2 rounded-sm border text-xs font-medium whitespace-nowrap ${TASK_TONE[status]}`}>
+    {status === '已完成' && <Check className="w-3 h-3" />}
+    {status === '等待前置' && <Hourglass className="w-3 h-3" />}
+    {status}
+  </span>
+);
 
 export const IconButton: React.FC<{
   label: string;
